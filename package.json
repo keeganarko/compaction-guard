@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Saves and hash-checks an AI coding agent's conversation before it compacts, and blocks the compaction if the save fails.",
   "author": "Keegan Choudhury",
+  "homepage": "https://github.com/keeganarko/compaction-guard#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keeganarko/compaction-guard.git"
+  },
   "license": "SEE LICENSE IN LICENSE.md",
   "private": true,
   "type": "module",

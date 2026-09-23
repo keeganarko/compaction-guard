@@ -45,7 +45,7 @@ blocks the compaction. Nothing is lost.
 ## Install
 
 ```sh
-git clone <this repository> compaction-guard
+git clone https://github.com/keeganarko/compaction-guard.git
 cd compaction-guard
 npm test
 ```
