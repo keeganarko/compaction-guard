@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>compaction-guard</title>
+<meta name="description" content="Saves and checks an AI coding agent's conversation before it compacts, and blocks the compaction if the save fails.">
+<style>
+:root{--bg:#ffffff;--ink:#000000;--muted:#5d5d5d;--line:#e5e5e5;--soft:#f5f5f5;--good:#0a7d0a;--bad:#b3261e}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#111111;--ink:#ffffff;--muted:#a3a3a3;--line:#333333;--soft:#1c1c1c;--good:#5fd35f;--bad:#ff8a80}}
+:root[data-theme="dark"]{--bg:#111111;--ink:#ffffff;--muted:#a3a3a3;--line:#333333;--soft:#1c1c1c;--good:#5fd35f;--bad:#ff8a80}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+main{max-width:860px;margin:0 auto;padding:40px 16px 64px}
+h1{font-size:34px;line-height:1.1;margin:0 0 12px;letter-spacing:-.02em}
+h2{font-size:21px;margin:0 0 12px}
+.lead{font-size:21px;line-height:1.4;margin:0 0 14px}
+.sub{color:var(--muted);margin:0}
+a{color:inherit;text-underline-offset:3px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.chips a,.chips span{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:14px;text-decoration:none}
+section{margin:32px 0 0;padding:22px;border:1px solid var(--line);border-radius:14px}
+.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:0;padding:0;list-style:none;counter-reset:s}
+.flow li{counter-increment:s;background:var(--soft);border-radius:10px;padding:12px;font-size:14px;line-height:1.35}
+.flow li::before{content:counter(s);display:flex;align-items:center;justify-content:center;width:24px;height:24px;margin-bottom:8px;border-radius:50%;background:var(--ink);color:var(--bg);font-size:12px;font-weight:700}
+.fork{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.out{border-radius:10px;padding:14px;border:2px solid var(--line)}
+.out b{display:block;font-size:16px;margin-bottom:2px}
+.out span{font-size:14px;color:var(--muted)}
+.out.ok{border-color:var(--good)} .out.ok b{color:var(--good)}
+.out.no{border-color:var(--bad)} .out.no b{color:var(--bad)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.stat{background:var(--soft);border-radius:10px;padding:14px}
+.stat b{display:block;font-size:28px;line-height:1.1;font-weight:600}
+.stat span{font-size:14px;color:var(--muted)}
+pre{margin:0;background:var(--soft);border-radius:10px;padding:14px;font-size:13px;line-height:1.5;overflow-x:auto}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.two div{background:var(--soft);border-radius:10px;padding:14px}
+.two h3{margin:0 0 6px;font-size:15px}
+.two ul,.warn ul{margin:0;padding-left:20px}
+.two li,.warn li{margin:4px 0;font-size:15px}
+.note{font-size:14px;color:var(--muted);margin:12px 0 0}
+@media (max-width:680px){.flow,.stats,.fork,.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <h1>compaction-guard</h1>
+  <p class="lead">Before an AI agent squeezes its memory, this saves an exact copy first. If the copy fails, the squeeze doesn't happen.</p>
+  <p class="sub">For Claude Code. One file, no dependencies, Node.js 18 or later.</p>
+  <div class="chips"><a href="README.md">Full details: README.md</a><a href="LICENSE.md">License: FSL-1.1-MIT</a><span>Version 0.1.0</span></div>
+
+  <section>
+    <h2>What happens at every compaction</h2>
+    <ol class="flow">
+      <li>Claude Code is about to compact</li>
+      <li>Copy the whole conversation</li>
+      <li>Check nothing changed while copying</li>
+      <li>Read the copy back and match its fingerprint (SHA-256)</li>
+      <li>Write a receipt</li>
+    </ol>
+    <div class="fork">
+      <div class="out ok"><b>✓ Copy checked</b><span>Compaction goes ahead.</span></div>
+      <div class="out no"><b>✗ Anything failed</b><span>Compaction is blocked. Nothing is lost, and you see why.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Tested on September 23, 2026</h2>
+    <div class="stats">
+      <div class="stat"><b>19 / 19</b><span>tests pass on Node.js 18, 20 and 24 (Linux). Windows: 17 pass, 2 Unix-only checks skipped.</span></div>
+      <div class="stat"><b>✓ saved</b><span>In real Claude Code, <code>/compact</code> saved 248,342 bytes and the check passed.</span></div>
+      <div class="stat"><b>✓ blocked</b><span>With the folder locked, Claude Code said "Compaction blocked by PreCompact hook".</span></div>
+    </div>
+    <p class="note">Not tested yet: macOS, and a conversation that keeps changing during the copy.</p>
+  </section>
+
+  <section>
+    <h2>Where the copies go</h2>
+<pre>~/.compaction-guard/
+  index.jsonl                  ← one receipt per copy
+  &lt;project&gt;/&lt;session&gt;/&lt;time&gt;-&lt;manual|auto&gt;-&lt;random&gt;.jsonl</pre>
+    <p class="note">Private to you: folders 0700, files 0600 on macOS and Linux. Run <code>node compaction-guard.mjs verify</code> any time to re-check every copy.</p>
+  </section>
+
+  <section class="warn">
+    <h2>Know this before you install</h2>
+    <ul>
+      <li><b>A blocked automatic compaction can fail your request.</b> Usually the disk is full or the folder is locked. Fix that, or set <code>COMPACTION_GUARD_FAIL_OPEN=1</code>.</li>
+      <li><b>Copies hold whole conversations,</b> secrets included. Keep them on your machine. Never sync or commit them.</li>
+      <li><b>Nothing is deleted.</b> Every compaction adds a copy.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>The license in plain words</h2>
+    <div class="two">
+      <div><h3>You can</h3><ul><li>Read it</li><li>Use it, at home or at work</li><li>Change it and share it</li></ul></div>
+      <div><h3>You can't</h3><ul><li>Offer it, or something that does the same job, in a commercial product or service</li></ul></div>
+    </div>
+    <p class="note">Each version also becomes MIT two years after release. Source-available ("Fair Source"), not open source. LICENSE.md has the terms that apply. © 2026 Keegan Choudhury.</p>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /absolute/path/to/compaction-guard/compaction-guard.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}
