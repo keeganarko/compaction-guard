@@ -12,7 +12,7 @@ One file, `compaction-guard.mjs`. Node.js 18+, no dependencies.
 ## Rules
 
 - **Written fresh. Never copy code from Keegan's private projects, such as
-  Assembly.** Build from public behavior and documentation only. Before a release, compare lines against `Dev/assembly/src` (a check done
+  Array.** Build from public behavior and documentation only. Before a release, compare lines against `Dev/array/src` (a check done
   on 2026-09-23 found only imports and loop headers in common).
 - **License is FSL-1.1-MIT.** Call it "source-available", never "open source".
   Don't change the license, or add a dependency whose license conflicts with it,
