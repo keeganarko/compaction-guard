@@ -20,7 +20,8 @@ a{color:inherit;text-underline-offset:3px}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
 .chips a,.chips span{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:14px;text-decoration:none}
 section{margin:32px 0 0;padding:22px;border:1px solid var(--line);border-radius:14px}
-.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:0;padding:0;list-style:none;counter-reset:s}
+.start{margin:0 0 10px;color:var(--muted)}
+.flow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0;padding:0;list-style:none;counter-reset:s}
 .flow li{counter-increment:s;background:var(--soft);border-radius:10px;padding:12px;font-size:14px;line-height:1.35}
 .flow li::before{content:counter(s);display:flex;align-items:center;justify-content:center;width:24px;height:24px;margin-bottom:8px;border-radius:50%;background:var(--ink);color:var(--bg);font-size:12px;font-weight:700}
 .fork{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
@@ -29,14 +30,17 @@ section{margin:32px 0 0;padding:22px;border:1px solid var(--line);border-radius:
 .out span{font-size:14px;color:var(--muted)}
 .out.ok{border-color:var(--good)} .out.ok b{color:var(--good)}
 .out.no{border-color:var(--bad)} .out.no b{color:var(--bad)}
+.out.no b::before{content:"4";display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;margin-right:8px;border-radius:50%;background:var(--bad);color:var(--bg);font-size:12px;font-weight:700;vertical-align:1px}
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .stat{background:var(--soft);border-radius:10px;padding:14px}
 .stat b{display:block;font-size:28px;line-height:1.1;font-weight:600}
 .stat span{font-size:14px;color:var(--muted)}
 pre{margin:0;background:var(--soft);border-radius:10px;padding:14px;font-size:13px;line-height:1.5;overflow-x:auto}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.two div{background:var(--soft);border-radius:10px;padding:14px}
+.two div{background:var(--soft);border-radius:10px;padding:14px;min-width:0}
 .two h3{margin:0 0 6px;font-size:15px}
+.two p{margin:0 0 10px;font-size:15px}
+.two pre{background:var(--bg)}
 .two ul,.warn ul{margin:0;padding-left:20px}
 .two li,.warn li{margin:4px 0;font-size:15px}
 .note{font-size:14px;color:var(--muted);margin:12px 0 0}
@@ -52,16 +56,15 @@ pre{margin:0;background:var(--soft);border-radius:10px;padding:14px;font-size:13
 
   <section>
     <h2>What happens at every compaction</h2>
+    <p class="start">Claude Code is about to compact. First:</p>
     <ol class="flow">
-      <li>Claude Code is about to compact</li>
-      <li>Copy the whole conversation</li>
-      <li>Check nothing changed while copying</li>
+      <li>Save a copy of the whole conversation (again, if it changed while copying)</li>
       <li>Read the copy back and match its fingerprint (SHA-256)</li>
       <li>Write a receipt</li>
     </ol>
     <div class="fork">
-      <div class="out ok"><b>✓ Copy checked</b><span>Compaction goes ahead.</span></div>
-      <div class="out no"><b>✗ Anything failed</b><span>Compaction is blocked. Nothing is lost, and you see why.</span></div>
+      <div class="out ok"><b>✓ All three worked</b><span>Compaction goes ahead.</span></div>
+      <div class="out no"><b>Block the compaction</b><span>When any step fails. Nothing is lost, and you see why.</span></div>
     </div>
   </section>
 
@@ -80,7 +83,15 @@ pre{margin:0;background:var(--soft);border-radius:10px;padding:14px;font-size:13
 <pre>~/.compaction-guard/
   index.jsonl                  ← one receipt per copy
   &lt;project&gt;/&lt;session&gt;/&lt;time&gt;-&lt;manual|auto&gt;-&lt;random&gt;.jsonl</pre>
-    <p class="note">Private to you: folders 0700, files 0600 on macOS and Linux. Run <code>node compaction-guard.mjs verify</code> any time to re-check every copy.</p>
+    <p class="note">Private to you: folders 0700, files 0600 on macOS and Linux.</p>
+  </section>
+
+  <section>
+    <h2>Check the copies, and get one back</h2>
+    <div class="two">
+      <div><h3>verify: is every copy still exact?</h3><p>Re-hashes every copy and lists any that are missing or changed.</p><pre>node compaction-guard.mjs verify</pre></div>
+      <div><h3>restore: put a copy back</h3><p>Checks the copy against its receipt first, then writes it. Never replaces a file unless you add <code>--force</code>.</p><pre>node compaction-guard.mjs restore &lt;receipt id&gt; --to ~/restored</pre></div>
+    </div>
   </section>
 
   <section class="warn">

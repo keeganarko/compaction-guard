@@ -1,5 +1,7 @@
 # compaction-guard
 
+[![test](https://github.com/keeganarko/compaction-guard/actions/workflows/test.yml/badge.svg)](https://github.com/keeganarko/compaction-guard/actions/workflows/test.yml)
+
 Before an AI coding agent compacts its conversation, compaction-guard saves an
 exact copy, checks the copy by hash, and blocks the compaction if the save
 fails.
@@ -25,22 +27,23 @@ The background is in the post
 
 ## How it works
 
+![Claude Code is about to compact. compaction-guard saves a copy (1), checks its hash (2) and writes a receipt (3), and then the compaction runs. If any step fails, it blocks the compaction (4).](docs/how-it-works.svg)
+
 Claude Code runs compaction-guard as a `PreCompact` hook. It passes JSON on
 stdin that includes `session_id`, `transcript_path`, `cwd`, `hook_event_name`
 and `trigger` (`manual` for `/compact`, `auto` near the limit). Then:
 
-1. Stream the transcript into a new temporary file in the archive, computing
-   its SHA-256 while reading. Flush the file to disk.
-2. Compare the transcript's size and modification time before and after the
-   copy. If either changed, discard the copy and try again, up to three times.
-3. Rename the copy into place and flush the directory.
-4. Read the saved copy back and check that its size and hash match what was
-   read.
-5. Append a receipt to `index.jsonl` and flush it.
-6. Exit 0, and the compaction goes ahead.
-
-If any step fails, it exits 2 with a plain reason on stderr, and Claude Code
-blocks the compaction. Nothing is lost.
+1. **Save a copy.** Stream the transcript into a new temporary file in the
+   archive, computing its SHA-256 while reading, and flush it to disk. If the
+   transcript's size or modification time changed during the copy, discard
+   the copy and try again, up to three times. Rename the copy into place and
+   flush the folder.
+2. **Check its hash.** Read the saved copy back and check that its size and
+   SHA-256 match what was read.
+3. **Write a receipt.** Append one line to `index.jsonl` and flush it. Exit 0,
+   and the compaction goes ahead.
+4. **Block the compaction if any step fails.** Exit 2 with a plain reason on
+   stderr. Claude Code blocks the compaction, and nothing is lost.
 
 ## Install
 
@@ -107,6 +110,51 @@ node compaction-guard.mjs verify
 as verified, missing, changed, or invalid (unreadable, or pointing outside the
 archive). It exits 0 only if every receipt is verified.
 
+```text
+$ node compaction-guard.mjs verify
+2 receipts in /Users/you/.compaction-guard
+  verified  1
+  missing   0
+  changed   1
+  invalid   0
+changed: -Users-you-code-app/5f0c2a9e-…/2026-10-15T19-15-31-235Z-auto-bfd636df.jsonl
+```
+
+## Restore a copy
+
+```sh
+node compaction-guard.mjs restore <receipt id | sha256> [--to <path>] [--force]
+```
+
+`restore` hashes the saved copy and compares it with its receipt before it
+writes anything. It then copies the bytes through a temporary file, checking
+the hash again on the way, and puts the file in place.
+
+- **Which copy.** A receipt id is the saved copy's file name without `.jsonl`,
+  as `verify` and the receipt's `archive` field show it. You can also give the
+  SHA-256, or its first 8 or more hex digits. If several receipts hold the
+  same contents, the newest copy that still matches is used. If a hash prefix
+  matches different contents, nothing is restored and the matches are listed.
+- **Where it goes.** Without `--to`, back to the path it was saved from (the
+  receipt's `source`). With `--to`, to that file, or into that folder under its
+  original name. The folder must exist, and it can't be inside the archive.
+- **Nothing is replaced unless you ask.** If a file is already there,
+  `restore` refuses and exits 1. Add `--force` to replace it.
+
+Restore by receipt id into a folder:
+
+```text
+$ node compaction-guard.mjs restore 2026-10-15T19-15-31-178Z-manual-7cd9dd55 --to ~/restored
+Restored 2026-10-15T19-15-31-178Z-manual-7cd9dd55 to /Users/you/restored/5f0c2a9e-….jsonl: 29092 bytes, sha256 8c9ea86b…, checked against its receipt.
+```
+
+Restore by hash to where it came from, while the original is still there:
+
+```text
+$ node compaction-guard.mjs restore 8c9ea86b
+compaction-guard restore: /Users/you/.claude/projects/-Users-you-code-app/5f0c2a9e-….jsonl already exists; pass --force to replace it, or --to <path> to restore somewhere else
+```
+
 ## Configuration
 
 | Setting | Effect |
@@ -114,6 +162,8 @@ archive). It exits 0 only if every receipt is verified.
 | `--dir <path>` | Archive folder. Wins over the variable below. |
 | `COMPACTION_GUARD_DIR` | Archive folder, if `--dir` isn't given. The default is `~/.compaction-guard`. Use an absolute path. |
 | `COMPACTION_GUARD_FAIL_OPEN=1` | If a save fails, let compaction continue anyway (exit 1) instead of blocking it (exit 2). |
+| `--to <path>` | `restore` only. Where to write the copy: a file, or an existing folder. The default is the path it was saved from. |
+| `--force` | `restore` only. Replace a file that is already at the destination. |
 
 ## Exit codes
 
@@ -124,7 +174,10 @@ archive). It exits 0 only if every receipt is verified.
 | hook | 2 | The save failed. Claude Code blocks the compaction and shows the reason. |
 | verify | 0 | Every receipt verified, or there are no receipts yet. |
 | verify | 1 | At least one copy is missing or changed, or a receipt is invalid. |
-| verify | 2 | The archive couldn't be read. |
+| verify | 2 | The archive couldn't be read, or an argument was wrong. |
+| restore | 0 | The copy matched its receipt and was written. |
+| restore | 1 | Refused, and nothing was written: no receipt matches, a file is already there and `--force` wasn't given, or no saved copy matches its receipt. |
+| restore | 2 | An argument was wrong, the destination folder doesn't exist, or a read or write failed. |
 
 In hook mode stdout stays empty, because Claude Code reads hook stdout as a
 decision. Status goes to stderr.
@@ -141,8 +194,9 @@ decision. Status goes to stderr.
   machine. Don't put it in a synced or shared folder, and never commit it.
 - **Nothing is deleted.** Every compaction adds a copy, so disk use grows.
   Prune old copies yourself; `verify` will then list their receipts as missing.
-- **It copies; it doesn't restore.** It never reads, summarizes or restores a
-  conversation.
+- **It changes nothing unless you ask.** The hook copies a conversation byte
+  for byte; it never parses, summarizes or edits it. `restore` writes only
+  when you run it, and replaces a file only with `--force`.
 - **Claude Code only, for now.** Other agents have their own hooks, but they
   haven't been checked for this.
 
@@ -161,6 +215,17 @@ On 2026-09-23:
 
 Not verified yet: macOS, and the retry when the transcript changes during the
 copy (it has no automated test).
+
+## Development
+
+```sh
+npm test                 # the tests: node:test, no dependencies
+npx -y node@18 --test    # the oldest supported Node.js
+```
+
+The tests use synthetic transcripts only. CI runs them on every push and pull
+request, on Linux and macOS with Node.js 18 and the newest LTS
+([.github/workflows/test.yml](.github/workflows/test.yml)).
 
 ## License
 
