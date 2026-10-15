@@ -52,7 +52,7 @@ pre{margin:0;background:var(--soft);border-radius:10px;padding:14px;font-size:13
   <h1>compaction-guard</h1>
   <p class="lead">Before an AI agent squeezes its memory, this saves an exact copy first. If the copy fails, the squeeze doesn't happen.</p>
   <p class="sub">For Claude Code. One file, no dependencies, Node.js 18 or later.</p>
-  <div class="chips"><a href="README.md">Full details: README.md</a><a href="LICENSE.md">License: FSL-1.1-MIT</a><span>Version 0.1.0</span></div>
+  <div class="chips"><a href="README.md">Full details: README.md</a><a href="LICENSE.md">License: FSL-1.1-MIT</a><span>Version 0.2.0</span></div>
 
   <section>
     <h2>What happens at every compaction</h2>
@@ -69,13 +69,13 @@ pre{margin:0;background:var(--soft);border-radius:10px;padding:14px;font-size:13
   </section>
 
   <section>
-    <h2>Tested on September 23, 2026</h2>
+    <h2>Tested on October 15, 2026</h2>
     <div class="stats">
-      <div class="stat"><b>19 / 19</b><span>tests pass on Node.js 18, 20 and 24 (Linux). Windows: 17 pass, 2 Unix-only checks skipped.</span></div>
-      <div class="stat"><b>✓ saved</b><span>In real Claude Code, <code>/compact</code> saved 248,342 bytes and the check passed.</span></div>
+      <div class="stat"><b>31 / 31</b><span>tests pass on Linux and macOS, with Node.js 18 and 24. They run again on every change.</span></div>
+      <div class="stat"><b>✓ saved</b><span>In real Claude Code, <code>/compact</code> saved 174,303 bytes. The check passed, and restore gave back the same fingerprint.</span></div>
       <div class="stat"><b>✓ blocked</b><span>With the folder locked, Claude Code said "Compaction blocked by PreCompact hook".</span></div>
     </div>
-    <p class="note">Not tested yet: macOS, and a conversation that keeps changing during the copy.</p>
+    <p class="note">Not tested yet: this version on Windows, a live run on macOS, and a conversation that keeps changing during the copy.</p>
   </section>
 
   <section>

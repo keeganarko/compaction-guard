@@ -1,6 +1,6 @@
 {
   "name": "compaction-guard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Saves and hash-checks an AI coding agent's conversation before it compacts, and blocks the compaction if the save fails.",
   "author": "Keegan Choudhury",
   "homepage": "https://github.com/keeganarko/compaction-guard#readme",
@@ -17,7 +17,8 @@
   "files": [
     "compaction-guard.mjs",
     "LICENSE.md",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=18"

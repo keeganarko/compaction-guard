@@ -6,7 +6,7 @@ Before an AI coding agent compacts its conversation, compaction-guard saves an
 exact copy, checks the copy by hash, and blocks the compaction if the save
 fails.
 
-Version 0.1.0 works with Claude Code. It has one file and no dependencies, and
+Version 0.2.0 works with Claude Code. It has one file and no dependencies, and
 needs Node.js 18 or later. It is source-available under FSL-1.1-MIT, not open
 source; see [License](#license). The picture version of this page is
 [README.html](README.html).
@@ -202,7 +202,21 @@ decision. Status goes to stderr.
 
 ## What was verified
 
-On 2026-09-23:
+For 0.2.0, on 2026-10-15:
+
+- `npm test`: 31 of 31 tests pass on Linux (WSL2) with Node.js 18.20.8 and
+  24.19.0, and in
+  [CI](https://github.com/keeganarko/compaction-guard/actions/runs/38793591877)
+  on Linux and macOS with Node.js 18.20.8 and 24.21.0.
+- Live run in Claude Code 2.1.301 with the hook installed. `/compact` saved
+  the transcript (174,303 bytes) and `verify` confirmed it. `restore` wrote
+  the copy out with the same SHA-256, and refused to replace the original
+  without `--force`.
+- Live failure run: with the archive in a read-only folder, Claude Code
+  printed "Compaction blocked by PreCompact hook" with the reason, and the
+  conversation wasn't compacted.
+
+For 0.1.0, on 2026-09-23:
 
 - `npm test`: 19 of 19 tests pass on Linux (WSL2) with Node.js 18.20.8,
   20.20.2 and 24.19.0. On Windows with Node.js 24.19.0, 17 pass and the 2
@@ -213,7 +227,8 @@ On 2026-09-23:
   "Compaction blocked by PreCompact hook" with the reason, and no compaction
   was written to the transcript.
 
-Not verified yet: macOS, and the retry when the transcript changes during the
+Not verified yet: 0.2.0 on Windows, a live run on macOS (CI runs the tests
+there, not Claude Code), and the retry when the transcript changes during the
 copy (it has no automated test).
 
 ## Development

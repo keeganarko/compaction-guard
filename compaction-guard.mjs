@@ -12,7 +12,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 const INDEX_FILE = 'index.jsonl';
 const COPY_ATTEMPTS = 3;
 // restore accepts a SHA-256 by this many leading hex digits, or more.
