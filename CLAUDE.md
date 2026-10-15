@@ -11,9 +11,10 @@ One file, `compaction-guard.mjs`. Node.js 18+, no dependencies.
 
 ## Rules
 
-- **Written fresh. Never copy code from Keegan's private projects, such as
-  Array.** Build from public behavior and documentation only. Before a release, compare lines against `Dev/array/src` (a check done
-  on 2026-09-23 found only imports and loop headers in common).
+- **Written fresh. Never copy code from Keegan's private projects.** Build
+  from public behavior and documentation only. Before a release, compare
+  lines against the private checkout listed in the portfolio map (a check
+  done on 2026-09-23 found only imports and loop headers in common).
 - **License is FSL-1.1-MIT.** Call it "source-available", never "open source".
   Don't change the license, or add a dependency whose license conflicts with it,
   without Keegan.
@@ -31,9 +32,13 @@ One file, `compaction-guard.mjs`. Node.js 18+, no dependencies.
 ## Verify
 
 ```sh
-npm test                       # 19 tests, node:test
+npm test                       # 31 tests, node:test
 npx -y node@18 --test          # oldest supported Node
 ```
+
+CI (`.github/workflows/test.yml`) runs `npm test` on every push and pull
+request, on Linux and macOS with Node 18 and the newest LTS. After a push,
+check it with `gh run list -L 1`.
 
 A change to the hook path also gets a live run: install the hook in a
 throwaway folder with `claude --settings <file>`, run `/compact`, then
