@@ -6,7 +6,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, realpathSync } from 'node:fs';
-import { mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { link, lstat, mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -15,10 +15,17 @@ import { fileURLToPath } from 'node:url';
 export const VERSION = '0.1.0';
 const INDEX_FILE = 'index.jsonl';
 const COPY_ATTEMPTS = 3;
+// restore accepts a SHA-256 by this many leading hex digits, or more.
+const MIN_HASH_PREFIX = 8;
 
 const USAGE = `Usage:
-  compaction-guard [--dir <path>]          Hook mode: read a PreCompact event on stdin and save its transcript.
-  compaction-guard verify [--dir <path>]   Re-check every saved copy against its receipt.
+  compaction-guard [--dir <path>]
+      Hook mode: read a PreCompact event on stdin and save its transcript.
+  compaction-guard verify [--dir <path>]
+      Re-check every saved copy against its receipt.
+  compaction-guard restore <receipt id | sha256> [--to <path>] [--force] [--dir <path>]
+      Check a saved copy against its receipt, then write it back where it was
+      saved from, or to --to. An existing file is replaced only with --force.
   compaction-guard --help | --version
 
 Archive: --dir, else COMPACTION_GUARD_DIR, else ~/.compaction-guard.
@@ -27,6 +34,9 @@ Set COMPACTION_GUARD_FAIL_OPEN=1 to let compaction continue when a save fails.
 
 // A failure whose message is already plain enough to show the person.
 class GuardError extends Error {}
+
+// restore wrote nothing, for a reason it checked (exit 1; other failures exit 2).
+class Refusal extends GuardError {}
 
 function reason(err) {
   if (err instanceof GuardError) return err.message;
@@ -37,23 +47,47 @@ function reason(err) {
 
 export function parseArgs(argv) {
   const opts = { command: 'hook', dir: undefined };
+  const restore = { ref: undefined, to: undefined, force: false };
+  let restoreOnly; // the first argument only restore takes, reported if the command is not restore
+  const setPath = (flag, value) => {
+    if (flag === '--dir') {
+      opts.dir = value;
+      return;
+    }
+    if (value === '') throw new GuardError('--to needs a path');
+    restore.to = value;
+    restoreOnly ??= flag;
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === 'verify') {
-      if (opts.command === 'hook') opts.command = 'verify';
+    if (arg === 'verify' || arg === 'restore') {
+      if (opts.command === 'hook') opts.command = arg;
     } else if (arg === '--help' || arg === '-h') {
       opts.command = 'help';
     } else if (arg === '--version' || arg === '-v') {
       opts.command = 'version';
-    } else if (arg === '--dir') {
-      if (i + 1 >= argv.length) throw new GuardError('--dir needs a path');
-      opts.dir = argv[++i];
-    } else if (arg.startsWith('--dir=')) {
-      opts.dir = arg.slice('--dir='.length);
+    } else if (arg === '--dir' || arg === '--to') {
+      if (i + 1 >= argv.length) throw new GuardError(`${arg} needs a path`);
+      setPath(arg, argv[++i]);
+    } else if (arg.startsWith('--dir=') || arg.startsWith('--to=')) {
+      const eq = arg.indexOf('=');
+      setPath(arg.slice(0, eq), arg.slice(eq + 1));
+    } else if (arg === '--force') {
+      restore.force = true;
+      restoreOnly ??= arg;
+    } else if (!arg.startsWith('-') && restore.ref === undefined) {
+      restore.ref = arg;
+      restoreOnly ??= arg;
     } else {
       throw new GuardError(`unknown argument: ${arg}`);
     }
   }
+  if (opts.command === 'help' || opts.command === 'version') return opts;
+  if (opts.command === 'restore') {
+    if (restore.ref === undefined) throw new GuardError('restore needs a receipt id or a SHA-256');
+    return { ...opts, ...restore };
+  }
+  if (restoreOnly !== undefined) throw new GuardError(`unknown argument: ${restoreOnly}`);
   return opts;
 }
 
@@ -218,45 +252,164 @@ function isInside(root, file) {
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
-// Re-hashes every archived copy named in index.jsonl.
-export async function verifyArchive(root) {
-  const result = { total: 0, verified: 0, missing: [], changed: [], invalid: [] };
+// Reads index.jsonl. Each receipt line becomes { where, receipt, file }, or { where, problem } if unusable.
+async function readIndex(root) {
   let text;
   try {
     text = await readFile(path.join(root, INDEX_FILE), 'utf8');
   } catch (err) {
-    if (err.code === 'ENOENT') return result;
+    if (err.code === 'ENOENT') return [];
     throw err;
   }
+  const entries = [];
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i].trim()) continue;
-    result.total++;
     const where = `${INDEX_FILE} line ${i + 1}`;
     let receipt;
     try {
       receipt = JSON.parse(lines[i]);
     } catch {
-      result.invalid.push(`${where}: not valid JSON`);
+      entries.push({ where, problem: 'not valid JSON' });
       continue;
     }
     const file = receipt && typeof receipt.archive === 'string' ? path.resolve(root, receipt.archive) : null;
     if (!file || !isInside(root, file) || typeof receipt.sha256 !== 'string' || !Number.isInteger(receipt.bytes)) {
-      result.invalid.push(`${where}: incomplete receipt, or it points outside the archive`);
+      entries.push({ where, problem: 'incomplete receipt, or it points outside the archive' });
       continue;
     }
-    let actual;
-    try {
-      actual = await hashFile(file);
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
-      result.missing.push(receipt.archive);
+    entries.push({ where, receipt, file });
+  }
+  return entries;
+}
+
+// Hashes one archived copy and compares it with its receipt: 'verified', 'missing' or 'changed'.
+async function checkCopy({ receipt, file }) {
+  let actual;
+  try {
+    actual = await hashFile(file);
+  } catch (err) {
+    if (err.code === 'ENOENT') return 'missing';
+    throw err;
+  }
+  return actual.bytes === receipt.bytes && actual.sha256 === receipt.sha256 ? 'verified' : 'changed';
+}
+
+// Re-hashes every archived copy named in index.jsonl.
+export async function verifyArchive(root) {
+  const result = { total: 0, verified: 0, missing: [], changed: [], invalid: [] };
+  for (const entry of await readIndex(root)) {
+    result.total++;
+    if (entry.problem) {
+      result.invalid.push(`${entry.where}: ${entry.problem}`);
       continue;
     }
-    if (actual.bytes === receipt.bytes && actual.sha256 === receipt.sha256) result.verified++;
-    else result.changed.push(receipt.archive);
+    const state = await checkCopy(entry);
+    if (state === 'verified') result.verified++;
+    else result[state].push(entry.receipt.archive);
   }
   return result;
+}
+
+// A receipt's id is its copy's file name without .jsonl.
+function receiptId(receipt) {
+  return path.posix.basename(receipt.archive, '.jsonl');
+}
+
+// The receipts a restore reference names: a SHA-256 by 8 or more leading hex digits, or a receipt id
+// (also accepted with .jsonl, or as the archive path its receipt records).
+function findReceipts(entries, ref) {
+  const usable = entries.filter((entry) => entry.receipt);
+  if (/^[0-9a-f]+$/i.test(ref)) {
+    if (ref.length < MIN_HASH_PREFIX) throw new GuardError(`give at least ${MIN_HASH_PREFIX} characters of the SHA-256`);
+    const prefix = ref.toLowerCase();
+    return usable.filter((entry) => entry.receipt.sha256.toLowerCase().startsWith(prefix));
+  }
+  const id = path.posix.basename(ref, '.jsonl');
+  return usable.filter((entry) => receiptId(entry.receipt) === id);
+}
+
+// stat (or lstat) a path, or null if nothing is there.
+async function lookup(file, how = stat) {
+  try {
+    return await how(file);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+// Copies a checked archive copy to dest through a temporary file beside it, hashing the bytes again on
+// the way. Returns null, leaving nothing behind, if they no longer match the receipt.
+async function placeCopy({ receipt, file }, dest, force) {
+  const dir = path.dirname(dest);
+  const tmp = path.join(dir, `.${path.basename(dest)}.${randomBytes(4).toString('hex')}.tmp`);
+  let copied;
+  try {
+    copied = await copyAndHash(file, tmp);
+  } catch (err) {
+    if (err.code !== 'EEXIST') await removeQuietly(tmp);
+    throw err;
+  }
+  if (copied.bytes !== receipt.bytes || copied.sha256 !== receipt.sha256) {
+    await removeQuietly(tmp);
+    return null;
+  }
+  try {
+    // A hard link is never made over an existing file, so without --force nothing is replaced,
+    // even if a file appears at dest after restore looked.
+    if (force) await rename(tmp, dest);
+    else await link(tmp, dest);
+  } catch (err) {
+    await removeQuietly(tmp);
+    if (err.code === 'EEXIST') throw new Refusal(`${dest} already exists; pass --force to replace it`);
+    throw err;
+  }
+  if (!force) await removeQuietly(tmp);
+  await syncDir(dir);
+  return copied;
+}
+
+// Writes a saved copy back after checking it against its receipt. Replaces a file only if force is set.
+export async function restoreTranscript(root, { ref, to, force = false }) {
+  const matches = findReceipts(await readIndex(root), ref).reverse(); // newest first
+  if (matches.length === 0) throw new Refusal(`no receipt in ${path.join(root, INDEX_FILE)} matches ${ref}`);
+  if (new Set(matches.map((entry) => entry.receipt.sha256)).size > 1) {
+    const list = matches.map((entry) => `\n  ${receiptId(entry.receipt)}  sha256 ${entry.receipt.sha256}`).join('');
+    throw new Refusal(`${ref} matches receipts with different contents; name one by its id:${list}`);
+  }
+
+  const { receipt } = matches[0];
+  let dest;
+  if (to !== undefined) {
+    dest = path.resolve(to);
+    if ((await lookup(dest))?.isDirectory()) {
+      const original = typeof receipt.source === 'string' ? receipt.source.split(/[\\/]/).pop() : '';
+      dest = path.join(dest, safeSegment(original, `${receiptId(receipt)}.jsonl`));
+    }
+  } else if (typeof receipt.source === 'string' && path.isAbsolute(receipt.source)) {
+    dest = receipt.source;
+  } else {
+    throw new Refusal('the receipt does not record where the transcript was; pass --to <path>');
+  }
+  if (isInside(root, dest)) throw new Refusal(`${dest} is inside the archive; restore it somewhere else`);
+  const existing = await lookup(dest, lstat);
+  if (existing?.isDirectory()) throw new Refusal(`${dest} is a folder; pass --to <file>`);
+  if (existing && !force) {
+    throw new Refusal(`${dest} already exists; pass --force to replace it, or --to <path> to restore somewhere else`);
+  }
+  const dir = path.dirname(dest);
+  if (!(await lookup(dir))?.isDirectory()) throw new GuardError(`the folder ${dir} does not exist`);
+
+  // Check each copy before writing anything. Several receipts can name the same contents.
+  const problems = [];
+  for (const entry of matches) {
+    const state = await checkCopy(entry);
+    const copied = state === 'verified' ? await placeCopy(entry, dest, force) : null;
+    if (copied) return { id: receiptId(entry.receipt), dest, ...copied };
+    problems.push(`${state === 'verified' ? 'changed' : state}: ${entry.receipt.archive}`);
+  }
+  throw new Refusal(`no saved copy matches its receipt, so nothing was restored:\n  ${problems.join('\n  ')}`);
 }
 
 function fail(env, io, why) {
@@ -300,13 +453,31 @@ async function runVerify(root, io) {
   return result.verified === result.total ? 0 : 1;
 }
 
+async function runRestore(root, opts, io) {
+  try {
+    const restored = await restoreTranscript(root, opts);
+    io.out(
+      `Restored ${restored.id} to ${restored.dest}: ${restored.bytes} bytes, sha256 ${restored.sha256}, ` +
+        'checked against its receipt.\n',
+    );
+    return 0;
+  } catch (err) {
+    io.err(`compaction-guard restore: ${reason(err)}\n`);
+    return err instanceof Refusal ? 1 : 2;
+  }
+}
+
 export async function main(argv, env, io) {
   let opts;
   try {
     opts = parseArgs(argv);
   } catch (err) {
     io.err(USAGE);
-    return fail(env, io, reason(err));
+    // A bad argument blocks compaction only in hook mode; verify and restore just report it.
+    const command = argv.find((arg) => arg === 'verify' || arg === 'restore');
+    if (!command) return fail(env, io, reason(err));
+    io.err(`compaction-guard ${command}: ${reason(err)}\n`);
+    return 2;
   }
   if (opts.command === 'help') {
     io.out(USAGE);
@@ -318,6 +489,7 @@ export async function main(argv, env, io) {
   }
   const root = archiveRoot(opts, env);
   if (opts.command === 'verify') return runVerify(root, io);
+  if (opts.command === 'restore') return runRestore(root, opts, io);
 
   if (io.isTTY) {
     io.err(`compaction-guard runs as a Claude Code PreCompact hook and reads its event on stdin.\n\n${USAGE}`);

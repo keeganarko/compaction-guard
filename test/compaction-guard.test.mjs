@@ -267,3 +267,196 @@ test('parseArgs reads commands and the archive flag', () => {
   assert.throws(() => parseArgs(['--dir']), /needs a path/);
   assert.throws(() => parseArgs(['--nope']), /unknown argument/);
 });
+
+// The id restore takes: the saved copy's file name without .jsonl.
+function idOf(receipt) {
+  return path.posix.basename(receipt.archive, '.jsonl');
+}
+
+// Saves the fixture's transcript once and returns the newest receipt.
+function save(fx) {
+  const r = run({ input: event(fx), root: fx.root });
+  assert.equal(r.code, 0, r.stderr);
+  return receipts(fx.root).at(-1);
+}
+
+// Flips one bit, so the file keeps its size but not its hash.
+function flipBit(file) {
+  const bytes = fs.readFileSync(file);
+  bytes[0] ^= 1;
+  fs.writeFileSync(file, bytes);
+}
+
+function tmpFiles(dir) {
+  return fs.readdirSync(dir).filter((name) => name.endsWith('.tmp'));
+}
+
+test('verify catches a copy that changed but kept its size', (t) => {
+  const fx = fixture(t);
+  const receipt = save(fx);
+  flipBit(path.join(fx.root, receipt.archive));
+  const r = run({ args: ['verify'], root: fx.root });
+  assert.equal(r.code, 1);
+  assert.match(r.stdout, /changed {3}1/);
+  assert.match(r.stdout, new RegExp(`changed: ${receipt.archive}`));
+});
+
+test('verify exits 2 when the index cannot be read', (t) => {
+  const fx = fixture(t);
+  fs.mkdirSync(path.join(fx.root, 'index.jsonl'), { recursive: true });
+  const r = run({ args: ['verify'], root: fx.root });
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /could not read the archive/);
+});
+
+test('restore by receipt id writes the exact bytes to --to', (t) => {
+  const fx = fixture(t);
+  const receipt = save(fx);
+  const target = path.join(fx.tmp, 'restored.jsonl');
+  const r = run({ args: ['restore', idOf(receipt), '--to', target], root: fx.root });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`^Restored ${idOf(receipt)} to `));
+  assert.deepEqual(fs.readFileSync(target), fs.readFileSync(fx.transcript));
+  if (POSIX) assert.equal(fs.statSync(target).mode & 0o777, 0o600);
+  assert.deepEqual(tmpFiles(fx.tmp), []);
+});
+
+test('restore by SHA-256 prefix puts a deleted transcript back where it was', (t) => {
+  const fx = fixture(t);
+  const receipt = save(fx);
+  const original = fs.readFileSync(fx.transcript);
+  fs.rmSync(fx.transcript);
+  const r = run({ args: ['restore', receipt.sha256.slice(0, 12)], root: fx.root });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(fs.readFileSync(fx.transcript), original);
+});
+
+test('restore into a folder keeps the transcript file name', (t) => {
+  const fx = fixture(t);
+  const receipt = save(fx);
+  const folder = path.join(fx.tmp, 'out');
+  fs.mkdirSync(folder);
+  const r = run({ args: ['restore', receipt.sha256.toUpperCase(), '--to', folder], root: fx.root });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(fs.readFileSync(path.join(folder, `${fx.session}.jsonl`)), fs.readFileSync(fx.transcript));
+});
+
+test('restore never replaces a file without --force', (t) => {
+  const fx = fixture(t);
+  const receipt = save(fx);
+  const saved = fs.readFileSync(fx.transcript);
+  fs.appendFileSync(fx.transcript, `${JSON.stringify({ type: 'user', message: { content: 'newer' } })}\n`);
+  const newer = fs.readFileSync(fx.transcript);
+
+  const refused = run({ args: ['restore', idOf(receipt)], root: fx.root });
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /already exists; pass --force to replace it/);
+  assert.deepEqual(fs.readFileSync(fx.transcript), newer, 'the existing file is untouched');
+
+  const forced = run({ args: ['restore', idOf(receipt), '--force'], root: fx.root });
+  assert.equal(forced.code, 0, forced.stderr);
+  assert.deepEqual(fs.readFileSync(fx.transcript), saved);
+  assert.deepEqual(tmpFiles(path.dirname(fx.transcript)), []);
+});
+
+test('restore refuses a copy whose hash no longer matches, and writes nothing', (t) => {
+  const fx = fixture(t);
+  const receipt = save(fx);
+  flipBit(path.join(fx.root, receipt.archive));
+  const target = path.join(fx.tmp, 'restored.jsonl');
+  const r = run({ args: ['restore', receipt.sha256, '--to', target], root: fx.root });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /no saved copy matches its receipt, so nothing was restored/);
+  assert.match(r.stderr, new RegExp(`changed: ${receipt.archive}`));
+  assert.equal(fs.existsSync(target), false);
+  assert.deepEqual(tmpFiles(fx.tmp), []);
+});
+
+test('restore falls back to another copy with the same hash', (t) => {
+  const fx = fixture(t);
+  const older = save(fx);
+  const newer = save(fx);
+  assert.equal(older.sha256, newer.sha256);
+  fs.rmSync(path.join(fx.root, newer.archive));
+  const target = path.join(fx.tmp, 'restored.jsonl');
+  const r = run({ args: ['restore', older.sha256, '--to', target], root: fx.root });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`^Restored ${idOf(older)} `));
+  assert.deepEqual(fs.readFileSync(target), fs.readFileSync(fx.transcript));
+
+  fs.rmSync(path.join(fx.root, older.archive));
+  const none = run({ args: ['restore', older.sha256, '--to', path.join(fx.tmp, 'again.jsonl')], root: fx.root });
+  assert.equal(none.code, 1);
+  assert.match(none.stderr, new RegExp(`missing: ${newer.archive}`));
+  assert.match(none.stderr, new RegExp(`missing: ${older.archive}`));
+});
+
+test('restore refuses an unknown, ambiguous or too short reference', (t) => {
+  const fx = fixture(t);
+  const receipt = save(fx);
+  const target = path.join(fx.tmp, 'restored.jsonl');
+
+  const unknown = run({ args: ['restore', '0123456789abcdef', '--to', target], root: fx.root });
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.stderr, /no receipt in .* matches 0123456789abcdef/);
+
+  const prefix = receipt.sha256.slice(0, 8);
+  const twin = { ...receipt, archive: receipt.archive.replace(/\.jsonl$/, '-twin.jsonl'), sha256: prefix + '0'.repeat(56) };
+  fs.appendFileSync(path.join(fx.root, 'index.jsonl'), `${JSON.stringify(twin)}\n`);
+  const ambiguous = run({ args: ['restore', prefix, '--to', target], root: fx.root });
+  assert.equal(ambiguous.code, 1);
+  assert.match(ambiguous.stderr, /matches receipts with different contents/);
+
+  const short = run({ args: ['restore', prefix.slice(0, 6), '--to', target], root: fx.root });
+  assert.equal(short.code, 2);
+  assert.match(short.stderr, /at least 8 characters/);
+  assert.equal(fs.existsSync(target), false);
+});
+
+test('restore will not write inside the archive', (t) => {
+  const fx = fixture(t);
+  const receipt = save(fx);
+  const index = path.join(fx.root, 'index.jsonl');
+  const r = run({ args: ['restore', idOf(receipt), '--to', index, '--force'], root: fx.root });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /inside the archive/);
+  assert.equal(receipts(fx.root).length, 1);
+});
+
+test('verify and restore report a bad argument without blocking anything', (t) => {
+  const fx = fixture(t);
+  for (const args of [['restore'], ['restore', 'a', 'b'], ['verify', '--force']]) {
+    const r = run({ args, root: fx.root });
+    assert.equal(r.code, 2, args.join(' '));
+    assert.match(r.stderr, /compaction-guard (restore|verify): /);
+    assert.doesNotMatch(r.stderr, /compaction was blocked/);
+  }
+  const hook = run({ args: ['stray'], input: event(fx), root: fx.root });
+  assert.equal(hook.code, 2, 'in hook mode a stray word still blocks compaction, as in 0.1.0');
+  assert.match(hook.stderr, /unknown argument: stray/);
+  assert.match(hook.stderr, /compaction was blocked/);
+});
+
+test('parseArgs reads restore and its flags', () => {
+  assert.deepEqual(parseArgs(['restore', 'abc12345']), {
+    command: 'restore',
+    dir: undefined,
+    ref: 'abc12345',
+    to: undefined,
+    force: false,
+  });
+  assert.deepEqual(parseArgs(['--dir', '/a', 'restore', '--to=out.jsonl', '--force', 'abc12345']), {
+    command: 'restore',
+    dir: '/a',
+    ref: 'abc12345',
+    to: 'out.jsonl',
+    force: true,
+  });
+  assert.throws(() => parseArgs(['restore']), /needs a receipt id/);
+  assert.throws(() => parseArgs(['restore', 'a', 'b']), /unknown argument: b/);
+  assert.throws(() => parseArgs(['restore', 'a', '--to']), /--to needs a path/);
+  assert.throws(() => parseArgs(['restore', 'a', '--to=']), /--to needs a path/);
+  assert.throws(() => parseArgs(['--force']), /unknown argument: --force/);
+  assert.throws(() => parseArgs(['verify', 'abc12345']), /unknown argument: abc12345/);
+  assert.equal(parseArgs(['restore', '--help']).command, 'help');
+});
