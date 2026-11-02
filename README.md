@@ -23,7 +23,7 @@ survives if that storage is cleaned up or changed. If the copy can't be made
 and checked, the compaction doesn't happen.
 
 The background is in the post
-[Agents need direction more than anything](https://www.keegan-studio.com/writing/agents-need-direction.html).
+[Agents need direction more than anything](https://www.keegan.ai/writing/agents-need-direction.html).
 
 ## How it works
 
