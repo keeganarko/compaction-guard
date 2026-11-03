@@ -24,6 +24,13 @@ and checked, the compaction doesn't happen.
 
 The background is in the post
 [Agents need direction more than anything](https://www.keegan.ai/writing/agents-need-direction.html).
+`compaction-guard` is one of the source-available reliability primitives from
+[Agent Hub](https://www.keegan.ai/workspace/) (a 5-agent local control plane with
+82 shared tools and 8,738 tests), alongside
+[`receipt-checker`](https://github.com/keeganarko/receipt-checker) (clean-room
+git commit verification) and
+[`model-lab`](https://github.com/keeganarko/model-lab) (local LLM
+interpretability and activation steering).
 
 ## How it works
 
